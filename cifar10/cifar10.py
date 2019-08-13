@@ -10,10 +10,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
-from torchvision.models.resnet import *
+from models.resnet import *
 from torch.optim.lr_scheduler import *
 import argparse
 from tqdm import tqdm
+from models.resnet import *
 
 
 parser = argparse.ArgumentParser(description="cifar10 pytorch play")
@@ -56,14 +57,15 @@ transform_test = transforms.Compose(
     ])
 
 trainset = torchvision.datasets.CIFAR10(root="~/data/", train=True,download=True, transform=transform_train)
-trainloader = torch.utils.data.DataLoader(trainset, batch_size=bs, shuffle=True, num_workers=8)
+trainloader = torch.utils.data.DataLoader(trainset, batch_size=bs, shuffle=True, num_workers=2)
 
 testset = torchvision.datasets.CIFAR10(root="~/data/", train=False, download=True, transform=transform_test)
-testloader = torch.utils.data.DataLoader(testset, batch_size=100, shuffle=False, num_workers=4)
+testloader = torch.utils.data.DataLoader(testset, batch_size=100, shuffle=False, num_workers=2)
 
 classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'trunk')
 
-model = resnet18()
+model = resnet18(pretrained=False, num_classes=10)
+#model = ResNet18() #pytorch-cifar
 model.to(device)
 
 if args.resume:
@@ -77,17 +79,16 @@ if args.resume:
 
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=5e-4)
-scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer,milestones=[150,250,350], gamma=0.1)
 
 
 def train(epoch):
-    train_loss = 0.0
-    iter_loss = 0.0
     model.train()
+    train_loss = 0.0
+    iter_loss = 0.0    
     correct = 0
     total = 0
-    print('start training, epoch: ', epoch)
-    for batch_idx, (images, labels) in enumerate(trainloader, 0):
+    print('Epoch: ', epoch)
+    for batch_idx, (images, labels) in enumerate(trainloader):
         # get the inputs; data is a list of [inputs, labels]
         images, labels = images.to(device), labels.to(device)
 
@@ -101,17 +102,15 @@ def train(epoch):
         optimizer.step()
 
         train_loss += loss.item()
-        if (batch_idx+1)%200 == 0:
-            print('training [epoch {}, iter {}/{}], train_loss: {:.3f}'.format(epoch+1, batch_idx, len(trainloader), train_loss/(batch_idx+1)))
         
         _, predicted = outputs.max(1)
         total += labels.size(0)
         correct += predicted.eq(labels).sum().item()
-
-    print('training epoch {}, train_loss: {:.3f}'.format(epoch+1, train_loss/len(trainloader)))
+   
     writer.add_scalar('train_loss', train_loss/len(trainloader), epoch)
     accuracy = correct*100./total
     writer.add_scalar('train_acc', accuracy, epoch)
+    print('training epoch {}, train_loss: {:.3f}'.format(epoch+1, train_loss/len(trainloader)))
     print('training epoch{}, accuracy: {}'.format(epoch+1, accuracy))
 
 
@@ -125,25 +124,25 @@ def test(epoch):
     class_total = list(0. for i in range(10))
     print('evaluating, epoch:', epoch)
     with torch.no_grad():
-        for batch_idx, data in enumerate(testloader):
-            images, labels = data[0].to(device), data[1].to(device)
+        with tqdm(total=len(testset)) as pbar:
+            for batch_idx, (inputs, targets) in enumerate(testloader):
+                images, labels = inputs.to(device), targets.to(device)
 
-            outputs = model(images)
-            _, predicted = torch.max(outputs, 1)
-            loss = criterion(outputs, labels)
+                outputs = model(images)
+                _, predicted = torch.max(outputs, 1)
+                loss = criterion(outputs, labels)
 
-            test_loss += loss.item()
-            total += labels.size(0)
-            correct += (predicted==labels).sum().item()
-            """
-            c = (predicted==labels).squeeze()
-            for j in range(bs):
-                label = labels[j]
-                class_correct[label.item()] += c[j].item()
-                class_total[label.item()] += 1
-            """
-            if (batch_idx+1)%100==0:
-                print("test epoch {}, iter{}/{}, loss:{:.2f}".format(epoch, batch_idx, len(testloader), test_loss/(batch_idx+1)))
+                test_loss += loss.item()
+                total += labels.size(0)
+                correct += (predicted==labels).sum().item()
+                """
+                c = (predicted==labels).squeeze()
+                for j in range(bs):
+                    label = labels[j]
+                    class_correct[label.item()] += c[j].item()
+                    class_total[label.item()] += 1
+                """
+                pbar.update()
         
     print('test epoch {}, test loss: {:.3f}'.format(epoch+1, test_loss/len(testloader)))
     accuracy = 100.*correct/total
@@ -175,7 +174,6 @@ def main():
     for epoch in range(start_epoch, start_epoch+epoches):
         train(epoch)
         val_loss = test(epoch)
-        scheduler.step()
     
     writer.close()
 
